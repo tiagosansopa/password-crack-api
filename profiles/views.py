@@ -2,7 +2,14 @@ import subprocess
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .models import Profile
+from rest_framework.response import Response
+from rest_framework.decorators import api_view
+
 import json
+
+
+def check_connection(request):
+    return Response({"message": "Django API is connected"})
 
 @csrf_exempt
 def get_profile(request, id):
