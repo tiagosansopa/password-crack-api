@@ -4,13 +4,14 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .models import Profile
 from rest_framework import status
+from rest_framework import viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.contrib.auth.models import User
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import AllowAny
 from django.contrib.auth.hashers import make_password
-
+from .serializers import ProfileSerializer
 @csrf_exempt
 def validate_password_guess(request, id):
     profile = Profile.objects.get(id=id)
@@ -68,3 +69,9 @@ class ResetPasswordView(APIView):
         user.set_password(new_password)
         user.save()
         return Response({"message": "Password has been reset successfully."})
+    
+
+class ProfileViewSet(viewsets.ModelViewSet):
+    queryset = Profile.objects.all()
+    serializer_class = ProfileSerializer
+    permission_classes = [AllowAny]
