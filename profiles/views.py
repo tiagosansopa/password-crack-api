@@ -1,70 +1,70 @@
-import subprocess
+import exrex
+import random
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .models import Profile
+from rest_framework import status
 from rest_framework.response import Response
-from rest_framework.decorators import api_view
-
-import json
-
-
-def check_connection(request):
-    return Response({"message": "Django API is connected"})
+from rest_framework.views import APIView
+from django.contrib.auth.models import User
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework.permissions import AllowAny
+from django.contrib.auth.hashers import make_password
 
 @csrf_exempt
-def get_profile(request, id):
+def validate_password_guess(request, id):
     profile = Profile.objects.get(id=id)
-    data = {
-        "name": profile.name,
-        "description": profile.description,
-        "max_attempts": profile.max_attempts
-    }
-    return JsonResponse(data)
-
-@csrf_exempt
-def validate_password(request, id):
-    profile = Profile.objects.get(id=id)
-    body = json.loads(request.body)
-    guessed_password = body.get("password")
-
-    if guessed_password == profile.password:
-        return JsonResponse({"success": True, "message": "Password cracked!"})
+    if request.content_type == 'application/json':
+        body = json.loads(request.body)
     else:
-        return JsonResponse({"success": False, "message": "Incorrect password."})
+        body = request.POST
+    guess_pattern = body.get('pattern')
+    max_attempts = int(body.get('max_attempts', 1000))
+    success, attempts = try_crack_password(profile.password, guess_pattern, max_attempts)
+    if success:
+        return JsonResponse({"success": True, "message": f"Password cracked in {attempts} attempts!"})
+    else:
+        return JsonResponse({"success": False, "message": f"Failed to crack the password within {attempts} attempts."})
 
 
-@csrf_exempt
-def test_script(request, id):
-    # Get the profile for which the password needs to be cracked
-    profile = Profile.objects.get(id=id)
-    script = request.FILES['script']
+def try_crack_password(actual_password, pattern, max_attempts):
+    attempts = 0
+    used_guesses = set()
 
-    # Save the uploaded Python script temporarily
-    with open('uploaded_script.py', 'wb') as f:
-        f.write(script.read())
+    while attempts < max_attempts:
+        guess = exrex.getone(pattern)
+        if guess not in used_guesses:
+            attempts += 1
+            used_guesses.add(guess)
+            if guess == actual_password:
+                return True, attempts
 
-    # Execute the script in a sandboxed environment
-    try:
-        result = subprocess.run(
-            ['python3', 'uploaded_script.py'],  # Call the uploaded script
-            capture_output=True,                # Capture stdout and stderr
-            text=True,                          # Decode output as text
-            timeout=5                           # Limit execution time to 5 seconds
+    return False, attempts
+class RegisterStudentView(APIView):
+    permission_classes = [AllowAny]  # Allow anyone to register
+
+    def post(self, request):
+        username = request.data.get("username")
+        password = request.data.get("password")
+
+        if User.objects.filter(username=username).exists():
+            return Response({"error": "User already exists."}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = User.objects.create(
+            username=username,
+            password=make_password(password), 
         )
-
-        # Check if the student's script successfully guessed the password
-        if profile.password in result.stdout:
-            message = "Password cracked!"
-        else:
-            message = "Incorrect password or not found in script output."
-
-    except subprocess.TimeoutExpired:
-        message = "Script execution timed out."
-    except subprocess.CalledProcessError as e:
-        # Capture any errors from the script execution
-        message = f"Script failed with error: {e}"
-
-    # Clean up the temporary file (optional)
-    # os.remove('uploaded_script.py')
-
-    return JsonResponse({"message": message})
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            "refresh": str(refresh),
+            "access": str(refresh.access_token),
+            "user": user.username
+        })
+    
+class ResetPasswordView(APIView):
+    def post(self, request, user_id):
+        user = User.objects.get(id=user_id)
+        new_password = request.data.get("new_password")
+        user.set_password(new_password)
+        user.save()
+        return Response({"message": "Password has been reset successfully."})
