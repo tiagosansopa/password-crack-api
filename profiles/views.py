@@ -1,52 +1,66 @@
 import json
 import exrex
-import random
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from .models import Profile
-from rest_framework import status
-from rest_framework import viewsets
+from .models import Profile, Attempt  # Import Attempt model
+from django.utils import timezone  # Import timezone for timestamping
+from rest_framework import status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.contrib.auth.models import User
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.contrib.auth.hashers import make_password
-from .serializers import ProfileSerializer
+from .serializers import ProfileSerializer, UserProfileSerializer
 from django.contrib.auth import authenticate
-from rest_framework.permissions import IsAuthenticated
-from .serializers import UserProfileSerializer
 
+from rest_framework.decorators import api_view, permission_classes
+from django.utils import timezone
+from django.http import JsonResponse
+from .models import Profile, Attempt
+import json
+import exrex
 
-@csrf_exempt
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def validate_password_guess(request, id):
     profile = Profile.objects.get(id=id)
-    if request.content_type == 'application/json':
-        body = json.loads(request.body)
-    else:
-        body = request.POST
+    user = request.user
+
+    body = request.data
     guess_pattern = body.get('pattern')
-    max_attempts = int(body.get('max_attempts', 1000))
+    max_attempts = int(body.get('max_attempts', 100000))
+
     success, attempts = try_crack_password(profile.password, guess_pattern, max_attempts)
+    Attempt.objects.create(
+        profile=profile,
+        user=user,
+        regex_used=guess_pattern,
+        successful=success,
+        timestamp=timezone.now()
+    )
+
     if success:
-        return JsonResponse({"success": True, "message": f"Password cracked in {attempts} attempts!"})
+        profile.cracked = True
+        profile.save()
+
+    if success:
+        return JsonResponse({"success": True, "message": f"Password encontrado en {attempts} intentos.", "password": f"{profile.password}"})
     else:
-        return JsonResponse({"success": False, "message": f"Failed to crack the password within {attempts} attempts."})
+        return JsonResponse({"success": False, "message": f"Password no encontrado en {attempts} intentos."})
 
 
 def try_crack_password(actual_password, pattern, max_attempts):
     attempts = 0
     used_guesses = set()
-
     while attempts < max_attempts:
         guess = exrex.getone(pattern)
-        if guess not in used_guesses:
-            attempts += 1
-            used_guesses.add(guess)
-            if guess == actual_password:
-                return True, attempts
-
+        used_guesses.add(guess)
+        attempts += 1
+        if guess == actual_password:
+            return True, attempts
     return False, attempts
+
 class RegisterStudentView(APIView):
     permission_classes = [AllowAny]
 
@@ -82,6 +96,7 @@ class RegisterStudentView(APIView):
                 "fullName": f"{user.first_name} {user.last_name}"
             }
         })
+
 class LoginStudentView(APIView):
     permission_classes = [AllowAny]
 
@@ -106,11 +121,19 @@ class ResetPasswordView(APIView):
         user.set_password(new_password)
         user.save()
         return Response({"message": "Password has been reset successfully."})
-    
+
 class ProfileViewSet(viewsets.ModelViewSet):
     queryset = Profile.objects.all()
     serializer_class = ProfileSerializer
     permission_classes = [AllowAny]
+
+    def retrieve(self, request, *args, **kwargs):
+        profile = self.get_object()
+        serializer = self.get_serializer(profile)
+        profile_data = serializer.data
+        profile_data['attempt_count'] = profile.attempts.count()
+        return Response(profile_data)
+
 class CurrentUserProfileView(APIView):
     permission_classes = [IsAuthenticated]
 
